@@ -362,10 +362,12 @@ export type HelperDelegate = {
 export type HelperMap = Record<string, HelperDelegate>;
 
 /**
- * A registered partial: a parsed program or, when the environment has a
- * `parse` function, raw template source.
+ * A registered partial: a parsed program, raw template source (when the
+ * environment has a `parse` function), or a function such as a compiled
+ * template or an inline-partial body, called with the partial's context and
+ * the current data frame.
  */
-export type PartialTemplate = ParserProgram | string;
+export type PartialTemplate = ParserProgram | string | BlockRenderer;
 
 /** A registry of partials keyed by name. */
 export type PartialMap = Record<string, PartialTemplate>;
@@ -377,9 +379,9 @@ export interface DecoratorOptions {
   args: unknown[];
   hash: Record<string, unknown>;
   /** The decorator block body, when written as `{{#*name}}...{{/name}}`. */
-  fn?: BlockRenderer;
-  data?: DataFrame;
-  loc?: SourceLocation;
+  fn?: BlockRenderer | undefined;
+  data?: DataFrame | undefined;
+  loc?: SourceLocation | undefined;
 }
 
 /** Mutable registries a decorator may read or replace for the rest of a render. */

@@ -13,7 +13,17 @@ export type RuntimeErrorCode =
   /** A built-in helper was called with the wrong number of arguments. */
   | "invalid-arguments"
   /** A helper-shaped call (`{{name arg}}`) named a helper that is not registered. */
-  | "missing-helper";
+  | "missing-helper"
+  /** `knownHelpersOnly` is set and a helper-shaped call named an unregistered helper. */
+  | "unknown-helper"
+  /** A partial name resolved to nothing and no `{{#> }}` fallback body was written. */
+  | "missing-partial"
+  /** A registered partial is neither a program nor source that the environment can parse. */
+  | "invalid-partial"
+  /** A `{{* name}}` or `{{#* name}}` referenced a decorator that is not registered. */
+  | "missing-decorator"
+  /** The AST contained a node the walker does not recognise. */
+  | "unknown-node";
 
 /**
  * Raised for template-level failures such as strict-mode lookups.

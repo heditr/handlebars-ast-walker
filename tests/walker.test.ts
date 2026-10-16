@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import Handlebars from "handlebars";
 import { parseWithoutProcessing } from "@handlebars/parser";
@@ -638,5 +640,216 @@ describe("evaluateProgram: decorators", () => {
     };
     const helpers = { say: () => "quiet" };
     expect(expectParity("{{#if true}}{{* shout}}{{say}}{{/if}}{{say}}", {}, { decorators, helpers })).toBe("LOUDquiet");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Whitespace control, end to end
+// ---------------------------------------------------------------------------
+
+describe("evaluateProgram: whitespace control parity", () => {
+  test("given tildes on mustaches and block tags, should strip exactly what Handlebars strips", () => {
+    expect(expectParity("a  {{~v~}}  b\n{{~#if v~}}\n  in\n{{~/if~}}\nc", { v: "x" })).toBe("axbinc");
+  });
+
+  test("given a tilde on one side only, should keep whitespace on the other side", () => {
+    expect(expectParity("a  {{~v}}  b", { v: "x" })).toBe("ax  b");
+  });
+
+  test("given standalone block, else, and close lines, should remove the whole line", () => {
+    const template = "<ul>\n{{#each items}}\n  <li>{{this}}</li>\n{{else}}\n  <li>none</li>\n{{/each}}\n</ul>\n";
+    expect(expectParity(template, { items: ["a", "b"] })).toBe("<ul>\n  <li>a</li>\n  <li>b</li>\n</ul>\n");
+    expect(expectParity(template, { items: [] })).toBe("<ul>\n  <li>none</li>\n</ul>\n");
+  });
+
+  test("given a standalone comment, should remove its line without touching surrounding lines", () => {
+    expect(expectParity("one\n  {{! note }}\ntwo\n{{!-- block\ncomment --}}\nthree")).toBe("one\ntwo\nthree");
+  });
+
+  test("given a mustache alone on a line, should keep the line because mustaches are never standalone", () => {
+    expect(expectParity("a\n  {{v}}\nb", { v: "x" })).toBe("a\n  x\nb");
+  });
+
+  test("given a standalone chained else-if, should strip every link of the chain", () => {
+    const template = "{{#if a}}\n  A\n{{else if b}}\n  B\n{{else}}\n  C\n{{/if}}\n";
+    expect(expectParity(template, { a: 1 })).toBe("  A\n");
+    expect(expectParity(template, { b: 1 })).toBe("  B\n");
+    expect(expectParity(template, {})).toBe("  C\n");
+  });
+
+  test("given a standalone partial inside an indented block, should indent partial lines by the partial's own indent", () => {
+    const template = "{{#each items}}\n    {{> row}}\n{{/each}}";
+    const partials = { row: "<li>\n  {{this}}\n</li>\n" };
+    expect(expectParity(template, { items: [1, 2] }, { partials, parse: parseWithoutProcessing })).toBe(
+      "    <li>\n      1\n    </li>\n    <li>\n      2\n    </li>\n",
+    );
+  });
+
+  test("given ignoreStandalone, should keep standalone lines while still honouring tildes", () => {
+    expect(expectParity("{{#if a}}\n  x\n{{/if}}\n{{~v}}", { a: 1, v: "y" }, { ignoreStandalone: true })).toBe("\n  x\ny");
+  });
+
+  test("given windows line endings, should treat them as line breaks for standalone detection", () => {
+    expect(expectParity("a\r\n{{#if a}}\r\nb\r\n{{/if}}\r\nc", { a: 1 })).toBe("a\r\nb\r\nc");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Security: prototype access
+// ---------------------------------------------------------------------------
+
+describe("evaluateProgram: prototype access control", () => {
+  class Model {
+    own = "own";
+    get secret(): string {
+      return "s";
+    }
+    greet(this: Model): string {
+      return `hi ${this.own}`;
+    }
+  }
+
+  test("given __proto__ in a path, should never resolve it, even when inherited access is allowed by default", () => {
+    const template = "[{{__proto__}}][{{__proto__.constructor}}][{{a.__proto__.polluted}}][{{lookup this '__proto__'}}]";
+    const context = { a: {} };
+    expect(expectParity(template, context)).toBe("[][][][]");
+    expect(expectParity(template, context, { allowProtoPropertiesByDefault: true, allowProtoMethodsByDefault: true })).toBe(
+      "[][][][]",
+    );
+  });
+
+  test("given an inherited constructor, should render nothing and not expose Function through it", () => {
+    const template = "[{{constructor}}][{{constructor.name}}][{{constructor.constructor}}][{{lookup this 'constructor'}}]";
+    expect(expectParity(template, new Model())).toBe("[][][][]");
+    expect(expectParity(template, new Model(), { allowProtoMethodsByDefault: true })).toBe("[][][][]");
+  });
+
+  test("given a prototype object as context, should deny its own constructor back-reference", () => {
+    expect(expectParity("[{{constructor}}][{{constructor.name}}]", Model.prototype)).toBe("[][]");
+  });
+
+  test("given an own property that happens to be named constructor, should read it", () => {
+    expect(expectParity("{{constructor}}", { constructor: "plain" })).toBe("plain");
+  });
+
+  test("given an inherited getter, should deny it by default and allow it through either whitelist", () => {
+    const model = new Model();
+    expect(expectParity("[{{own}}][{{secret}}]", model)).toBe("[own][]");
+    expect(expectParity("[{{own}}][{{secret}}]", model, { allowProtoPropertiesByDefault: true })).toBe("[own][s]");
+    expect(expectParity("[{{own}}][{{secret}}]", model, { allowedProtoProperties: { secret: true } })).toBe("[own][s]");
+  });
+
+  test("given an inherited method, should deny it by default and call it with the context as this when allowed", () => {
+    const model = new Model();
+    expect(expectParity("[{{greet}}]", model)).toBe("[]");
+    expect(expectParity("[{{greet}}]", model, { allowProtoMethodsByDefault: true })).toBe("[hi own]");
+    expect(expectParity("[{{greet}}]", model, { allowedProtoMethods: { greet: true } })).toBe("[hi own]");
+  });
+
+  test("given a per-name denial over a permissive default, should deny that name only", () => {
+    const model = new Model();
+    const options: EvaluateOptions = { allowProtoPropertiesByDefault: true, allowedProtoProperties: { secret: false } };
+    expect(expectParity("[{{secret}}][{{own}}]", model, options)).toBe("[][own]");
+  });
+
+  test("given property access from helpers, blocks, and partials, should apply the same rules everywhere", () => {
+    const model = new Model();
+    const template = "{{#with this}}[{{secret}}]{{/with}}{{#each this}}[{{@key}}]{{/each}}{{> p}}";
+    const options = { partials: { p: "[{{secret}}]" }, parse: parseWithoutProcessing };
+    expect(expectParity(template, model, options)).toBe("[][own][]");
+    expect(expectParity(template, model, { ...options, allowProtoPropertiesByDefault: true })).toBe("[s][own][s]");
+  });
+
+  test("given a Function-typed value in the context, should not reach its prototype chain by name", () => {
+    const context = { fn: () => "called" };
+    expect(expectParity("[{{fn.constructor}}][{{fn.call}}][{{fn.bind}}]", context)).toBe("[][][]");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Handlebars 4.7 differential corpus
+// ---------------------------------------------------------------------------
+
+describe("evaluateProgram: Handlebars 4.7 differential corpus", () => {
+  const createHelpers = (): EvaluateOptions["helpers"] => ({
+    add: (a: number, b: number) => a + b,
+    raw: (options: { fn: () => string }) => options.fn(),
+    echo: (v: unknown) => v,
+    obj: () => ({ a: 1 }),
+    safe: (v: string) => new SafeString(v),
+    show: (options: { hash: Record<string, unknown> }) => JSON.stringify(options.hash),
+    args: (...args: unknown[]) => JSON.stringify(args.slice(0, -1)),
+    yes: () => true,
+  });
+
+  const cases: ReadonlyArray<{ name: string; template: string; context?: unknown; options?: EvaluateOptions }> = [
+    { name: "a raw block", template: "{{{{raw}}}} {{x}} {{{{/raw}}}}", context: { x: 1 } },
+    { name: "a caret else inside a block", template: "{{#if a}}A{{^}}notA{{/if}}", context: {} },
+    { name: "an inverse section with an else", template: "{{^a}}no{{else}}yes{{/a}}", context: { a: 1 } },
+    { name: "array index segments", template: "{{list.[0]}}|{{list.[1].n}}|{{list.length}}", context: { list: ["x", { n: "y" }] } },
+    { name: "a slash path through this", template: "{{this/n}}|{{./n}}", context: { n: 1 } },
+    { name: "numeric and negative literals", template: "{{add 1 2}}|{{add -1 2}}|{{add 1.5 0.5}}", context: {} },
+    { name: "an escaped quote in a string literal", template: `{{echo "say \\"hi\\""}}|{{echo 'it\\'s'}}`, context: {} },
+    { name: "every escapable character", template: "{{v}}", context: { v: "&<>\"'`=" } },
+    { name: "helpers returning zero, false, null, undefined, and an object", template: "[{{echo 0}}][{{echo false}}][{{echo null}}][{{echo undefined}}][{{obj}}]", context: {} },
+    { name: "a SafeString from a helper and a sub-expression", template: "{{safe '<i>'}}|{{echo (safe '<b>')}}", context: {} },
+    { name: "a hash built from data variables", template: "{{#each items}}{{show i=@index f=@first}}{{/each}}", context: { items: ["a", "b"] } },
+    { name: "a hash on a partial with an explicit context", template: "{{> p other a=1}}", context: { other: { b: 2 } }, options: { partials: { p: "{{a}}{{b}}" }, parse: parseWithoutProcessing } },
+    { name: "block params declared but not supplied", template: "{{#each items as |v k extra|}}{{v}}{{k}}[{{extra}}]{{/each}}", context: { items: ["x"] } },
+    { name: "deeply nested blocks with mixed data and context paths", template: "{{#each rows}}{{#with cells}}{{#if ../flag}}{{@../index}}:{{this}}{{/if}}{{/with}}{{/each}}", context: { rows: [{ flag: true, cells: "c" }, { flag: false, cells: "d" }] } },
+    { name: "an each over a Map", template: "{{#each m}}{{@key}}={{this}}{{#unless @last}},{{/unless}}{{/each}}", context: { m: new Map([["a", 1], ["b", 2]]) } },
+    { name: "an each over a Set", template: "{{#each s}}{{@index}}:{{this}} {{/each}}", context: { s: new Set(["x", "y"]) } },
+    { name: "an each over a string-keyed object with numeric-looking keys", template: "{{#each o}}{{@key}}{{/each}}", context: { o: { 2: "a", 1: "b", x: "c" } } },
+    { name: "a helper used as a sub-expression inside a block parameter", template: "{{#with (obj) as |it|}}{{it.a}}{{/with}}", context: {} },
+    { name: "positional arguments of every literal kind", template: "{{args 1 'two' true null undefined x}}", context: { x: [1] } },
+    { name: "a with over a falsy-but-present value", template: "{{#with n}}[{{this}}]{{else}}none{{/with}}", context: { n: 0 } },
+    { name: "an if over a function that returns zero", template: "{{#if f}}T{{else}}F{{/if}}", context: { f: () => 0 } },
+    { name: "a helper call where this is the loop item", template: "{{#each items}}{{yes}}{{this}}{{/each}}", context: { items: ["a"] } },
+    { name: "unicode content and values", template: "é {{v}} 日本", context: { v: "ü" } },
+    { name: "a comment adjacent to a mustache", template: "{{v}}{{!x}}{{v}}", context: { v: 1 } },
+    { name: "an each with else inside a partial block", template: "{{#> wrap}}{{#each items}}{{this}}{{else}}empty{{/each}}{{/wrap}}", context: { items: [] }, options: { partials: { wrap: "<{{> @partial-block}}>" }, parse: parseWithoutProcessing } },
+    { name: "a dynamic partial with a hash", template: "{{> (echo 'p') x=1}}", context: {}, options: { partials: { p: "[{{x}}]" }, parse: parseWithoutProcessing } },
+    { name: "a partial that recurses", template: "{{> tree}}", context: { n: "a", kids: [{ n: "b", kids: [] }, { n: "c", kids: [{ n: "d", kids: [] }] }] }, options: { partials: { tree: "{{n}}({{#each kids}}{{> tree}}{{/each}})" }, parse: parseWithoutProcessing } },
+  ];
+
+  for (const { name, template, context, options } of cases) {
+    test(`given ${name}, should render exactly what Handlebars 4.7 renders`, () => {
+      expectParity(template, context, { ...options, helpers: { ...createHelpers(), ...options?.helpers } });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// CSP: no dynamic code anywhere in the runtime
+// ---------------------------------------------------------------------------
+
+describe("source: CSP safety", () => {
+  const srcDir = fileURLToPath(new URL("../src/", import.meta.url));
+  const sourceFiles = readdirSync(srcDir, { recursive: true, encoding: "utf8" }).filter((name) => name.endsWith(".ts"));
+
+  test("given the runtime sources, should contain no eval, Function constructor, or string timers", () => {
+    const banned = [/\beval\s*\(/, /\bnew\s+Function\b/, /\bFunction\s*\(/, /\bset(?:Timeout|Interval)\s*\(\s*["'`]/];
+    const offenders = sourceFiles.flatMap((name) => {
+      const text = readFileSync(new URL(name, `file://${srcDir}`), "utf8");
+      return banned.filter((pattern) => pattern.test(text)).map((pattern) => `${name}: ${pattern.source}`);
+    });
+    expect(sourceFiles.length).toBeGreaterThan(0);
+    expect(offenders).toEqual([]);
+  });
+
+  test("given a locked-down global scope, should still render templates", () => {
+    const originalEval = globalThis.eval;
+    const originalFunction = globalThis.Function;
+    const blocked = () => {
+      throw new EvalError("blocked by CSP");
+    };
+    globalThis.eval = blocked as typeof eval;
+    (globalThis as { Function: unknown }).Function = blocked;
+    try {
+      expect(render("{{#each items}}{{> p}}{{/each}}", { items: [1, 2] }, { partials: { p: "[{{this}}]" }, parse: parseWithoutProcessing })).toBe("[1][2]");
+    } finally {
+      globalThis.eval = originalEval;
+      globalThis.Function = originalFunction;
+    }
   });
 });

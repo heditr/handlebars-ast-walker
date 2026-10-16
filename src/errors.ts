@@ -23,7 +23,9 @@ export type RuntimeErrorCode =
   /** A `{{* name}}` or `{{#* name}}` referenced a decorator that is not registered. */
   | "missing-decorator"
   /** The AST contained a node the walker does not recognise. */
-  | "unknown-node";
+  | "unknown-node"
+  /** `compileAST` or `renderAST` received a value that is not a `Program` node. */
+  | "invalid-program";
 
 /**
  * Raised for template-level failures such as strict-mode lookups.

@@ -9,7 +9,11 @@ import type { SourceLocation } from "./types";
 /** Machine-readable reasons a render can fail. */
 export type RuntimeErrorCode =
   /** Strict mode: a path segment was not present on its parent. */
-  "missing-property";
+  | "missing-property"
+  /** A built-in helper was called with the wrong number of arguments. */
+  | "invalid-arguments"
+  /** A helper-shaped call (`{{name arg}}`) named a helper that is not registered. */
+  | "missing-helper";
 
 /**
  * Raised for template-level failures such as strict-mode lookups.

@@ -293,9 +293,9 @@ export interface DataFrame {
 /** Per-invocation options for a helper's `fn` and `inverse` callbacks. */
 export interface BlockOptions {
   /** Data frame for the block body; defaults to the frame the helper received. */
-  data?: DataFrame;
+  data?: DataFrame | undefined;
   /** Values bound, in order, to the block's `as |a b|` parameters. */
-  blockParams?: unknown[];
+  blockParams?: unknown[] | undefined;
 }
 
 /**
@@ -336,9 +336,9 @@ export interface HelperOptions {
   /** Evaluated `key=value` arguments. An object with a `null` prototype. */
   hash: Record<string, unknown>;
   /** Current `@data` frame, or `undefined` when data tracking is disabled. */
-  data?: DataFrame;
+  data?: DataFrame | undefined;
   /** Location of the invoking expression when the AST carries locations. */
-  loc?: SourceLocation;
+  loc?: SourceLocation | undefined;
   lookupProperty: LookupProperty;
   /** Renders the block body. A no-op returning `""` for non-block invocations. */
   fn: BlockRenderer;

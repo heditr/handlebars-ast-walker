@@ -275,8 +275,8 @@ export type AnyNode = Program | Statement | Expression | Hash | HashPair;
  * Well-known keys are declared for discoverability; helpers may add any key.
  */
 export interface DataFrame {
-  /** The frame this one was created from. */
-  _parent?: DataFrame;
+  /** The frame this one was created from; explicitly `undefined` on the root frame. */
+  _parent?: DataFrame | undefined;
   /** The context the template was rendered with (`@root`). */
   root?: unknown;
   /** Set by `#each` for arrays and iterables. */
@@ -313,7 +313,8 @@ export interface BlockRenderer {
  * Secure property access as exposed to helpers. Follows the Handlebars
  * prototype-access rules configured through {@link RuntimeOptions}.
  *
- * @param parent - The object to read from. Non-objects yield `undefined`.
+ * @param parent - The value to read from. `null` and `undefined` yield `undefined`;
+ *   primitives expose their own properties, so `"abc"` has a `length`.
  * @param propertyName - The property to read.
  */
 export interface LookupProperty {
